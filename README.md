@@ -2,7 +2,7 @@
 
 A local web dashboard and DVR for Blink home security cameras. Auto-downloads motion clips to your own storage, gives you a three-pane web interface to browse them, and lets you arm/disarm cameras without the Blink app.
 
-Built because Blink doesn't have a desktop app and refuses to let its cameras stream locally.
+Built because Blink doesn't have a desktop app and the official cameras don't expose a local API.
 
 ![Blink DVR dashboard](img/img.jpg)
 ---
@@ -11,7 +11,7 @@ Built because Blink doesn't have a desktop app and refuses to let its cameras st
 
 - **A Blink subscription is REQUIRED.** Blink's free tier doesn't store clips on their servers, which means there's nothing for this script to download. You need either the **Blink Plus Plan** (~$10/month, unlimited cameras) or **Blink Basic Plan** (~$3/month per camera). A 30-day free trial is available — start there to test before committing.
 
-- **No live streaming.** Blink's servers cut live view sessions to ~30 seconds and use proprietary AWS Kinesis WebRTC that's not realistically streamable. This DVR captures *motion clips after they happen*, not live video. If you need real-time monitoring, buy an RTSP camera (Reolink, Tapo, Wyze with RTSP firmware).
+- **Live streaming is not yet implemented in this dashboard, but it IS possible.** Blink uses a proprietary protocol called IMMIS (MPEG-TS over TCP) that has been reverse-engineered by the community. As of `blinkpy` 0.25+, livestream proxying is supported via the library's `BlinkLiveStream` class — see projects like [blinkbridge](https://github.com/roger-/blinkbridge) for a working RTSP bridge implementation. Adding native live view to this dashboard is on the roadmap.
 
 - **No authentication on the web dashboard.** Anyone on your local network can access it. Don't expose port 5000 to the internet without adding authentication or putting it behind a VPN.
 
@@ -342,14 +342,14 @@ The dashboard's "ARM / DISARM" and "Enable / Disable" buttons make API calls to 
 
 ---
 
-## Adding to the Project
+## Roadmap / Adding to the Project
 
 The code is intentionally simple and self-contained. Some natural extensions:
 
-- **Live RTSP feed** for an additional non-Blink camera (Reolink etc.) in the same dashboard
+- **Live view via IMMIS / MPEG-TS streaming** using `blinkpy`'s built-in `BlinkLiveStream` class (planned)
+- **RTSP feed integration** for additional non-Blink cameras (Reolink, Tapo, Wyze, etc.) in the same dashboard
 - **Auto-refresh** the clip list every 30 seconds so new ones appear without clicking
 - **Per-camera filter dropdown** to view clips from one camera at a time
-- **Live View on demand** button that triggers a fresh recording (uses `blinkpy`'s `get_liveview`)
 - **HTTP basic auth** to lock the dashboard down even on local network
 - **Discord / Telegram notifications** when motion clips arrive
 
@@ -358,6 +358,7 @@ The code is intentionally simple and self-contained. Some natural extensions:
 ## Credits
 
 - Built on top of the excellent [`blinkpy`](https://github.com/fronzbot/blinkpy) library by Kevin Fronczak. Without it, accessing Blink's API would be a far bigger project.
+- Original Blink protocol reverse engineering by [MattTW](https://github.com/MattTW/BlinkMonitorProtocol).
 - Flask for the web framework, doing what it always does — getting out of the way.
 
 ---
