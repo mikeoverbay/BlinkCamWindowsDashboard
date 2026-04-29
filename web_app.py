@@ -7,6 +7,8 @@ import asyncio
 import configparser
 import json
 import logging
+import motion_tracker
+
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -52,6 +54,10 @@ def thumb_filename(camera_name):
 
 
 # --- Routes ---------------------------------------------------------------
+@app.route("/api/active_motion")
+def api_active_motion():
+    """Return cameras currently in active motion state."""
+    return jsonify(motion_tracker.get_active_cameras())
 
 @app.route("/")
 def index():
@@ -157,19 +163,28 @@ def api_camera_motion():
 
 @app.route("/api/clips")
 def api_clips():
+    """List downloaded MP4s with metadata, newest first."""
+    from metadata_helper import read_sidecar
+
     if not CLIPS_DIR.exists():
         return jsonify([])
     clips = []
     for mp4 in CLIPS_DIR.glob("*.mp4"):
         stat = mp4.stat()
-        clips.append({
+        sidecar = read_sidecar(mp4)
+        clip_data = {
             "filename": mp4.name,
             "size_mb": round(stat.st_size / 1_000_000, 2),
             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        })
+            "source": None,        # cv_motion / pir / snapshot
+            "cv_detection": [],    # ['vehicle'], ['person'], etc.
+        }
+        if sidecar:
+            clip_data["source"] = sidecar.get("source")
+            clip_data["cv_detection"] = sidecar.get("cv_detection", [])
+        clips.append(clip_data)
     clips.sort(key=lambda c: c["modified"], reverse=True)
     return jsonify(clips[:200])
-
 
 @app.route("/clips/<path:filename>")
 def serve_clip(filename):
@@ -180,4 +195,9 @@ if __name__ == "__main__":
     print("Blink DVR Web starting on http://0.0.0.0:5000")
     print("Access from this PC: http://localhost:5000")
     print("Access from phones/tablets on same WiFi: http://<your-pc-ip>:5000")
+    
+    motion_tracker.start_background_thread()
+    print("Motion tracker started (polls Blink every 10 sec)")
+    
+    
     app.run(host="0.0.0.0", port=5000, debug=False)

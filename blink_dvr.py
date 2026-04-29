@@ -79,8 +79,13 @@ async def setup_blink(session):
 
 
 async def download_new_clips(blink):
-    # Look back 24 hours in UTC to dodge timezone weirdness in blinkpy's
-    # internal state tracking. Filename-based dedup below prevents re-downloads.
+    from datetime import datetime, timedelta, timezone
+    from metadata_helper import (
+        metadata_path_for,
+        write_sidecar,
+        match_event_to_file,
+    )
+
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
         "%Y/%m/%d %H:%M:%S"
     )
@@ -99,23 +104,54 @@ async def download_new_clips(blink):
     )
 
     after = set(OUTPUT_DIR.rglob("*.mp4"))
-    new_files = after - before
+    new_files = list(after - before)
+
+    # If we got new clips, fetch their metadata and write sidecars
+    if new_files:
+        log.info(f"Downloaded {len(new_files)} new clip(s); fetching metadata")
+        try:
+            api_since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
+                "%Y-%m-%dT%H:%M:%S+0000"
+            )
+            url = (
+                f"{blink.urls.base_url}/api/v1/accounts/{blink.account_id}"
+                f"/media/changed?since={api_since}&page=1"
+            )
+            resp = await blink.auth.query(
+                url=url, headers=blink.auth.header, reqtype="get", json_resp=True
+            )
+            events = resp.get("media", []) if isinstance(resp, dict) else []
+
+            sidecar_count = 0
+            for event in events:
+                matched = match_event_to_file(event, new_files)
+                if matched and not metadata_path_for(matched).exists():
+                    write_sidecar(matched, event)
+                    sidecar_count += 1
+            if sidecar_count:
+                log.info(f"Wrote {sidecar_count} metadata sidecar(s)")
+        except Exception as e:
+            log.warning(f"Metadata fetch failed (clips still saved): {e}")
+
     return len(new_files)
 
-
 def cleanup_old_clips():
+    from metadata_helper import metadata_path_for
+
     if DELETE_AFTER_DAYS <= 0:
         return 0
     cutoff = datetime.now() - timedelta(days=DELETE_AFTER_DAYS)
     count = 0
     for mp4 in OUTPUT_DIR.rglob("*.mp4"):
         if datetime.fromtimestamp(mp4.stat().st_mtime) < cutoff:
+            sidecar = metadata_path_for(mp4)
             mp4.unlink()
+            if sidecar.exists():
+                sidecar.unlink()
             count += 1
     if count:
         log.info(f"Cleaned up {count} old clips")
     return count
-
 
 async def main():
     log.info("Blink DVR starting")
