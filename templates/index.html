@@ -16,6 +16,26 @@
     background: #333;
   }
 
+  .motion-indicator {
+    display: inline-block;
+    margin-left: 0.4rem;
+    font-size: 1rem;
+    animation: motion-pulse 1.2s ease-in-out infinite;
+    vertical-align: middle;
+  }
+  @keyframes motion-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.6; transform: scale(1.15); }
+  }
+  
+  .clips-list-wrap .clip-icon {
+    display: inline-block;
+    margin-right: 0.4rem;
+    font-size: 1rem;
+    width: 1.5rem;
+    text-align: center;
+  }
+
   .panel { background: #222; }
   .panel-padded { padding: 1rem; overflow-y: auto; }
   .panel h2 {
@@ -33,27 +53,6 @@
   .controls button.system-btn.armed { background: #c00; }
   .controls button.system-btn.disarmed { background: #060; }
 
-  .settings-wrap { position: relative; margin-bottom: 1rem; display: flex; justify-content: flex-end; }
-  .dots-btn {
-    background: #333; color: #ccc; border: none; border-radius: 4px;
-    padding: 0.4rem 0.7rem; cursor: pointer; font-size: 1.1rem; line-height: 1;
-    font-weight: bold;
-  }
-  .dots-btn:hover { background: #444; color: #fff; }
-  .settings-menu {
-    display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
-    background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
-    padding: 0.5rem; min-width: 220px; z-index: 100;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
-  }
-  .settings-menu.open { display: block; }
-  .settings-menu label {
-    display: flex; align-items: center; gap: 0.5rem;
-    padding: 0.5rem; font-size: 0.85rem; cursor: pointer;
-    border-radius: 3px;
-  }
-  .settings-menu label:hover { background: #333; }
-  .settings-menu label input { cursor: pointer; }
 
   .camera-card {
     background: #2a2a2a; border-radius: 4px; margin-bottom: 0.6rem; overflow: hidden;
@@ -237,11 +236,25 @@
   .clips-list-wrap li {
     padding: 0.6rem 0.5rem; border-bottom: 1px solid #333; cursor: pointer;
     font-size: 0.85rem;
+    display: flex; align-items: flex-start; gap: 0.4rem;
   }
   .clips-list-wrap li:hover { background: #2c2c2c; }
   .clips-list-wrap li.active { background: #1a4a1a; }
+  .clips-list-wrap .clip-body { flex: 1 1 auto; min-width: 0; }
   .clips-list-wrap .filename { font-weight: 600; word-break: break-all; }
   .clips-list-wrap .meta { color: #888; font-size: 0.72rem; margin-top: 0.2rem; }
+
+  /* Per-clip delete button */
+  .clip-delete-btn {
+    flex: 0 0 auto;
+    background: none; border: none; color: #777;
+    cursor: pointer; font-size: 0.95rem; line-height: 1;
+    padding: 0.15rem 0.35rem; border-radius: 3px;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+  }
+  .clips-list-wrap li:hover .clip-delete-btn { opacity: 1; }
+  .clip-delete-btn:hover { color: #fff; background: #c0392b; }
 </style>
 </head>
 <body>
@@ -253,16 +266,6 @@
     <div class="system-arm">
       <button id="btn-arm" class="system-btn" onclick="setSystemArm(true)">ARM</button>
       <button id="btn-disarm" class="system-btn" onclick="setSystemArm(false)">DISARM</button>
-    </div>
-
-    <div class="settings-wrap">
-      <button class="dots-btn" onclick="toggleSettings(event)" title="Settings">⋮</button>
-      <div id="settings-menu" class="settings-menu">
-        <label>
-          <input type="checkbox" id="opt-loop" checked onchange="applyLoop()">
-          Loop video playback
-        </label>
-      </div>
     </div>
 
     <h2>Cameras</h2>
@@ -349,30 +352,17 @@
   let dateStart = null;
   let dateEnd = null;
 
-  // --- Settings menu -----------------------------------------------------
-  function toggleSettings(e) {
-    e.stopPropagation();
-    document.getElementById('settings-menu').classList.toggle('open');
-  }
+// --- Close popovers on outside click -----------------------------------
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.settings-wrap')) {
-      document.getElementById('settings-menu').classList.remove('open');
-    }
     if (!e.target.closest('.date-filter-row')) {
       document.getElementById('date-popover').classList.remove('open');
     }
   });
 
-  function applyLoop() {
-    const checked = document.getElementById('opt-loop').checked;
-    document.getElementById('video-player').loop = checked;
-    localStorage.setItem('blink_loop', checked ? '1' : '0');
-  }
 
   (function initSettings() {
     const saved = localStorage.getItem('blink_loop');
     const enabled = saved === null ? true : saved === '1';
-    document.getElementById('opt-loop').checked = enabled;
     document.getElementById('video-player').loop = enabled;
 
     const now = new Date();
@@ -386,6 +376,52 @@
     syncInputsFromDates();
     updateDateButton();
   })();
+
+ 
+// --- Live motion polling ----------------------------------------------
+  async function pollActiveMotion() {
+    try {
+      const res = await fetch('/api/active_motion');
+      const active = await res.json();
+      
+      document.querySelectorAll('.camera-card').forEach(card => {
+        const name = card.dataset.cameraName;
+        const nameSpan = card.querySelector('.name');
+        if (!nameSpan) return;
+        
+        // Remove any existing motion indicator
+        const oldBadge = nameSpan.querySelector('.motion-indicator');
+        if (oldBadge) oldBadge.remove();
+        
+        if (active[name]) {
+          const cv = active[name].cv_detection || [];
+          let icon = '🔴';
+          let title = 'Motion detected';
+          if (cv.includes('person') && cv.includes('vehicle')) {
+            icon = '🚶🚗'; title = 'Person + Vehicle';
+          } else if (cv.includes('person')) {
+            icon = '🚶'; title = 'Person detected';
+          } else if (cv.includes('vehicle')) {
+            icon = '🚗'; title = 'Vehicle detected';
+          } else if (active[name].source === 'pir') {
+            icon = '〰️'; title = 'PIR motion';
+          }
+          
+          const badge = document.createElement('span');
+          badge.className = 'motion-indicator';
+          badge.textContent = icon;
+          badge.title = title;
+          nameSpan.appendChild(badge);
+        }
+      });
+    } catch (e) {
+      // Silently swallow — motion polling errors shouldn't disrupt the UI
+    }
+  }
+
+  // Poll every 5 seconds
+  setInterval(pollActiveMotion, 5000);
+  pollActiveMotion();  // immediate first poll
 
   // --- Camera list -------------------------------------------------------
   async function loadCameras() {
@@ -412,11 +448,12 @@
         <div class="row">
           <span class="name">${cam.name}</span>
           <button class="toggle ${cam.motion_enabled ? 'on' : 'off'}"
-                  onclick="toggleCamera('${safeName}', ${!cam.motion_enabled})">
+                  onclick="event.stopPropagation();toggleCamera('${safeName}', ${!cam.motion_enabled})">
             ${cam.motion_enabled ? 'ON' : 'OFF'}
           </button>
         </div>
-      `;
+		`;
+
       list.appendChild(card);
     });
   }
@@ -559,6 +596,25 @@
     }
   }
 
+  function clipIcon(clip) {
+    const cv = clip.cv_detection || [];
+    const hasPerson = cv.includes('person');
+    const hasVehicle = cv.includes('vehicle');
+    if (hasPerson && hasVehicle) return '🚶🚗';
+    if (hasPerson) return '🚶';
+    if (hasVehicle) return '🚗';
+    if (clip.source === 'cv_motion') return '👁️';   // CV ran, found nothing
+    if (clip.source === 'pir') return '〰️';         // basic motion (Minis)
+    if (clip.source === 'snapshot') return '📷';    // manual capture
+    return '❓';                                     // unknown / no metadata yet
+  }
+
+  function clipTitle(clip) {
+    const cv = clip.cv_detection || [];
+    if (cv.length) return cv.join(' + ');
+    return clip.source || 'unknown';
+  }
+
   function renderClips() {
     const list = document.getElementById('clip-list');
     const status = document.getElementById('search-status');
@@ -605,13 +661,48 @@
     visible.forEach(clip => {
       const li = document.createElement('li');
       const date = new Date(clip.modified).toLocaleString();
+      const icon = clipIcon(clip);
       li.innerHTML = `
-        <div class="filename">${clip.filename}</div>
-        <div class="meta">${date} · ${clip.size_mb} MB</div>
+        <div class="clip-body">
+          <div class="filename"><span class="clip-icon" title="${clipTitle(clip)}">${icon}</span> ${clip.filename}</div>
+          <div class="meta">${date} · ${clip.size_mb} MB</div>
+        </div>
+        <button class="clip-delete-btn" title="Delete this clip">🗑</button>
       `;
       li.onclick = () => playClip(clip.filename, li);
+      li.querySelector('.clip-delete-btn').onclick = (e) => confirmDeleteClip(e, clip.filename);
       list.appendChild(li);
     });
+  }
+
+  // --- Delete a clip (with confirm second-chance cancel) ----------------
+  async function confirmDeleteClip(event, filename) {
+    event.stopPropagation();  // don't trigger the row's click-to-play
+
+    const ok = confirm(
+      `Delete this clip permanently?\n\n${filename}\n\nThis removes the local copy and cannot be undone.`
+    );
+    if (!ok) return;  // Cancel — nothing happens
+
+    try {
+      const res = await fetch('/api/clips/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: filename})
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        // If the deleted clip is currently in the preview pane, clear it
+        const info = document.getElementById('info-text').textContent;
+        if (info === `🎬 ${filename}`) clearPreview();
+        loadClips();
+      } else {
+        alert('Delete failed: ' + (data.error || 'unknown error'));
+      }
+    } catch (e) {
+      alert('Delete failed: ' + e);
+    }
   }
 
   function formatRangeForStatus() {

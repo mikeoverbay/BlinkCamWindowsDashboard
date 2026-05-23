@@ -191,6 +191,45 @@ def serve_clip(filename):
     return send_from_directory(CLIPS_DIR, filename)
 
 
+@app.route("/api/clips/delete", methods=["POST"])
+def api_delete_clip():
+    """Delete a single downloaded clip (and its sidecar/thumbnail) from local disk.
+
+    This only removes the local copy. If the clip is still within Blink's cloud
+    retention window, blink_dvr.py may re-download it on its next poll.
+    """
+    filename = (request.json or {}).get("filename", "")
+
+    # --- Safety: only a bare filename, no path components ---
+    if not filename or filename != Path(filename).name:
+        return jsonify({"ok": False, "error": "Invalid filename"}), 400
+    if not filename.lower().endswith(".mp4"):
+        return jsonify({"ok": False, "error": "Not a clip file"}), 400
+
+    clips_dir = CLIPS_DIR.resolve()
+    target = (clips_dir / filename).resolve()
+
+    # --- Safety: resolved path must still live inside CLIPS_DIR ---
+    if clips_dir != target.parent:
+        return jsonify({"ok": False, "error": "Path escapes clips directory"}), 400
+    if not target.is_file():
+        return jsonify({"ok": False, "error": "File not found"}), 404
+
+    try:
+        target.unlink()
+        # Remove sidecar metadata + any cached thumbnail alongside it.
+        # Covers both 'clip.json' and 'clip.mp4.json' naming conventions.
+        for sidecar in (target.with_suffix(".json"),
+                        target.with_suffix(".mp4.json"),
+                        target.with_suffix(".jpg")):
+            if sidecar.is_file():
+                sidecar.unlink()
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    return jsonify({"ok": True, "filename": filename})
+
+
 if __name__ == "__main__":
     print("Blink DVR Web starting on http://0.0.0.0:5000")
     print("Access from this PC: http://localhost:5000")
